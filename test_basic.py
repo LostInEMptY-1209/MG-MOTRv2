@@ -1,11 +1,13 @@
 """
 Basic tests for MG-MOTRv2
-验证核心模块可以正常运行
+基础测试 - 验证核心模块可以正常运行
+
+运行：
+    python test_basic.py
 """
 
 import torch
 import sys
-sys.path.insert(0, '/home/engine/project')
 
 
 def test_granularity_level():
@@ -14,10 +16,9 @@ def test_granularity_level():
     
     layer = GranularityLevel(d_model=256, n_heads=8, granularity="fine")
     x = torch.randn(2, 100, 256)
-    out, aux = layer(x)
+    out = layer(x)
     
     assert out.shape == x.shape
-    assert aux.shape == x.shape
     print("✓ GranularityLevel test passed")
 
 
@@ -26,12 +27,10 @@ def test_multi_granularity_attention():
     from mg_motrv2.models.mg_attention import MultiGranularityAttention
     
     mg_attn = MultiGranularityAttention(d_model=256, n_heads=8, n_levels=3)
-    
-    batch_size, seq_len = 2, 100
-    features = [torch.randn(batch_size, seq_len, 256) for _ in range(3)]
+    features = [torch.randn(2, 100, 256) for _ in range(3)]
     
     fused = mg_attn(features)
-    assert fused.shape == (batch_size, seq_len, 256)
+    assert fused.shape == (2, 100, 256)
     print("✓ MultiGranularityAttention test passed")
 
 
@@ -43,14 +42,13 @@ def test_temporal_granularity_attention():
         d_model=256, n_heads=8, n_frames=4, n_levels=3
     )
     
-    batch_size, seq_len = 2, 100
     frame_features = [
-        [torch.randn(batch_size, seq_len, 256) for _ in range(3)]
+        [torch.randn(2, 100, 256) for _ in range(3)]
         for _ in range(4)
     ]
     
     output = temporal_attn(frame_features)
-    assert output.shape == (batch_size, seq_len, 256)
+    assert output.shape == (2, 100, 256)
     print("✓ TemporalGranularityAttention test passed")
 
 
@@ -72,7 +70,7 @@ def test_backbone():
     print("✓ MultiGranularityBackbone test passed")
 
 
-def test_mg_motr():
+def test_mg_detr_head():
     """测试 MG_DETRHead"""
     from mg_motrv2.models.mg_motr import MG_DETRHead
     
@@ -84,8 +82,7 @@ def test_mg_motr():
         n_granularity_levels=3
     )
     
-    # 模拟输入
-    feat = torch.randn(2, 256, 25, 40)  # [B, C, H, W]
+    feat = torch.randn(2, 256, 25, 40)
     mg_features = [
         torch.randn(2, 256, 50, 80),
         torch.randn(2, 256, 25, 40),
@@ -109,7 +106,7 @@ def test_full_model():
     config = Config()
     config_dict = config.to_dict()
     
-    # 使用较小配置以节省内存
+    # 使用较小配置
     config_dict['model']['num_queries'] = 10
     config_dict['model']['detr']['n_encoder_layers'] = 2
     config_dict['model']['detr']['n_decoder_layers'] = 2
@@ -139,14 +136,8 @@ def test_matcher():
     }
     
     targets = [
-        {
-            "labels": torch.tensor([0]),
-            "boxes": torch.rand(1, 4)
-        },
-        {
-            "labels": torch.tensor([0, 0]),
-            "boxes": torch.rand(2, 4)
-        }
+        {"labels": torch.tensor([0]), "boxes": torch.rand(1, 4)},
+        {"labels": torch.tensor([0, 0]), "boxes": torch.rand(2, 4)}
     ]
     
     indices = matcher(outputs, targets)
@@ -186,16 +177,16 @@ def test_losses():
 
 def run_all_tests():
     """运行所有测试"""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Running MG-MOTRv2 Basic Tests")
-    print("="*60 + "\n")
+    print("=" * 60 + "\n")
     
     tests = [
         test_granularity_level,
         test_multi_granularity_attention,
         test_temporal_granularity_attention,
         test_backbone,
-        test_mg_motr,
+        test_mg_detr_head,
         test_full_model,
         test_matcher,
         test_losses,
@@ -210,9 +201,9 @@ def run_all_tests():
             traceback.print_exc()
             return False
     
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("All tests passed!")
-    print("="*60)
+    print("=" * 60)
     return True
 
 

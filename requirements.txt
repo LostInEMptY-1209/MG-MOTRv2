@@ -1,7 +1,7 @@
 # MG-MOTRv2 Requirements
 # Python >= 3.8
 
-# Core dependencies
+# Core
 torch>=1.9.0
 torchvision>=0.10.0
 numpy>=1.19.0
@@ -10,7 +10,6 @@ scipy>=1.5.0
 # Data processing
 opencv-python>=4.5.0
 pillow>=8.0.0
-matplotlib>=3.3.0
 
 # Training utilities
 tensorboard>=2.5.0
@@ -18,9 +17,3 @@ tqdm>=4.60.0
 
 # Configuration
 pyyaml>=5.4.0
-
-# Optional: for visualization
-seaborn>=0.11.0
-
-# Optional: for experiment tracking
-# wandb>=0.12.0

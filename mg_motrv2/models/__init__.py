@@ -1,5 +1,5 @@
 """
-MG-MOTRv2 Models
+MG-MOTRv2 Models - 模型模块导出
 """
 
 from .mg_attention import (
@@ -18,25 +18,29 @@ from .mg_motr import (
 
 from .backbone import (
     MultiGranularityBackbone,
-    ResNetBackbone,
-    FeaturePyramidNetwork,
     build_backbone
 )
 
+from .mg_motrv2 import (
+    MGMOTRv2,
+    build_model
+)
+
 __all__ = [
-    # Attention modules
+    # 核心多粒度注意力
     "MultiGranularityAttention",
-    "TemporalGranularityAttention", 
+    "TemporalGranularityAttention",
     "GranularityLevel",
     "build_mg_attention",
-    # MOTR modules
+    # DETR和跟踪
     "MG_DETRHead",
     "MGTransformerEncoder",
     "MGTransformerDecoder",
     "MGTracker",
-    # Backbone modules
+    # 骨干网络
     "MultiGranularityBackbone",
-    "ResNetBackbone",
-    "FeaturePyramidNetwork",
     "build_backbone",
+    # 完整模型
+    "MGMOTRv2",
+    "build_model",
 ]

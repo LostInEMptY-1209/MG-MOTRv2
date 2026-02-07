@@ -1,8 +1,10 @@
-# MG-MOTRv2 项目结构
+# MG-MOTRv2 项目结构（精简版）
 
 ## 概述
 
-本项目基于 MOTRv2 架构，实现了**多粒度注意力机制（Multi-Granularity Attention）**的多目标跟踪研究框架。
+基于 MOTRv2 架构的多粒度注意力机制多目标跟踪研究框架 - **精简版**
+
+保留核心功能，去除不必要的复杂部分，预留扩展空间。
 
 ## 核心模块
 
@@ -19,34 +21,24 @@
 │                   ↓                     │
 │         ┌─────────────┐                 │
 │         │   Fusion    │  ← 自适应融合   │
-│         │ (adaptive/  │    concat/sum  │
-│         │ concat/sum) │                 │
 │         └─────────────┘                 │
 └─────────────────────────────────────────┘
 ```
 
-**主要组件：**
-- `GranularityLevel`: 单一层级的粒度注意力模块
-- `MultiGranularityAttention`: 整合3个粒度层级的注意力模块
-- `TemporalGranularityAttention`: 时序多粒度注意力（支持视频序列）
+**组件**：
+- `GranularityLevel`: 单层粒度注意力
+- `MultiGranularityAttention`: 多粒度融合（adaptive/concat/sum）
+- `TemporalGranularityAttention`: 时序多粒度（可选扩展）
 
-### 2. MG-DETR 头 (`models/mg_motr.py`)
+### 2. 骨干网络 (`models/backbone.py`)
 
-**主要组件：**
-- `MG_DETRHead`: 多粒度DETR检测头
-- `MGTransformerEncoder`: 多粒度Transformer编码器
-- `MGTransformerDecoder`: Transformer解码器
-- `MGTracker`: 轨迹管理器（生命周期管理）
-
-### 3. 骨干网络 (`models/backbone.py`)
-
-**架构：**
+**架构**：
 ```
 Input Image
     ↓
-ResNet (backbone)
+ResNet (Backbone)
     ↓
-FPN (Feature Pyramid Network)
+FPN (Feature Pyramid)
     ↓
 Multi-Granularity Features:
   - Fine   [B, C, H/4, W/4]
@@ -54,86 +46,83 @@ Multi-Granularity Features:
   - Coarse [B, C, H/16, W/16]
 ```
 
-### 4. 完整模型集成 (`models/mg_motrv2.py`)
+### 3. MG-DETR头 (`models/mg_motr.py`)
 
-**完整数据流：**
+**组件**：
+- `MGTransformerEncoder`: 编码器（后半部分使用MG-Attention）
+- `MGTransformerDecoder`: 标准解码器
+- `MGTracker`: 轨迹管理（简化版贪心匹配）
+
+### 4. 完整模型 (`models/mg_motrv2.py`)
+
+**数据流**：
 ```
-Input Image [B, 3, H, W]
+Input Image
     ↓
 MultiGranularityBackbone
     ↓
-Multi-Granularity Features {fine, medium, coarse}
+{Fine, Medium, Coarse} Features
     ↓
-MG_DETRHead (Encoder + Decoder with MG-Attention)
+MG_DETRHead (Encoder + Decoder)
     ↓
-Detection Outputs + Track Queries
+Detection Outputs
     ↓
 MGTracker
     ↓
-Tracking Results {id, bbox, score, ...}
+Tracking Results
 ```
 
 ## 配置文件 (`configs/default_config.py`)
 
-**配置类别：**
+**配置项**：
 - `model`: 模型架构参数
-- `train`: 训练参数（学习率、批次大小等）
-- `data`: 数据配置（数据集、增强等）
-- `test`: 测试参数
+- `train`: 训练参数
+- `data`: 数据配置
 - `log`: 日志配置
-- `device`: 硬件配置
 
-**预定义配置：**
+**预定义配置**：
 - `get_base_config()`: 基础配置
-- `get_mot17_config()`: MOT17数据集配置
-- `get_dance_config()`: DanceTrack数据集配置（启用时序）
 - `get_debug_config()`: 调试配置（快速验证）
 
 ## 工具函数
 
 ### 匹配器 (`utils/matcher.py`)
-- `HungarianMatcher`: 匈牙利匹配器（预测与真值的最优匹配）
-- 支持分类代价、边界框L1代价、GIoU代价
+- `HungarianMatcher`: 匈牙利匹配器
+- 支持分类/L1/GIoU代价
 
 ### 损失函数 (`utils/losses.py`)
-- `SetCriterion`: DETR风格的集合损失
+- `SetCriterion`: DETR风格集合损失
   - 分类损失（交叉熵）
   - 边界框损失（L1 + GIoU）
-- `TrackingLoss`: 跟踪专用损失
-  - ReID对比损失
-  - 时序一致性损失
 
 ## 脚本
 
-### 训练脚本 (`train.py`)
+### 演示 (`demo.py`)
 ```bash
-# 基础训练
-python -m mg_motrv2.train --dataset mot17 --batch_size 2
-
-# 调试模式
-python -m mg_motrv2.train --debug
+python -m mg_motrv2.demo --all       # 运行所有演示
+python -m mg_motrv2.demo --mg-attn   # 多粒度注意力
+python -m mg_motrv2.demo --backbone  # 骨干网络
+python -m mg_motrv2.demo --model     # 完整模型
 ```
 
-### 演示脚本 (`demo.py`)
+### 训练 (`train.py`)
 ```bash
-# 运行所有演示
-python -m mg_motrv2.demo --all
+python -m mg_motrv2.train --debug    # 快速验证
+python -m mg_motrv2.train --dataset mot17 --batch_size 2
+```
 
-# 特定演示
-python -m mg_motrv2.demo --granularity
-python -m mg_motrv2.demo --mg-attn
-python -m mg_motrv2.demo --temporal
-python -m mg_motrv2.demo --model
-python -m mg_motrv2.demo --structure
+### 测试 (`test_basic.py`)
+```bash
+python test_basic.py  # 验证所有核心模块
 ```
 
 ## 扩展接口
 
-### 1. 添加新粒度级别
+### 1. 添加新粒度
 ```python
-# 在 GranularityLevel 中添加
+# mg_attention.py 中修改 stride 字典
 self.stride = {
-    "ultra_fine": 0.5,   # 新粒度
+    "ultra_fine": 0.5,  # 新粒度
     "fine": 1,
     "medium": 2,
     "coarse": 4,
@@ -148,28 +137,23 @@ class CustomFusionMGAttention(MultiGranularityAttention):
         return fused
 ```
 
-### 3. 自定义损失
+### 3. 添加新损失
 ```python
-class CustomLoss(nn.Module):
-    def forward(self, predictions, targets):
-        return loss
-
-# 在 SetCriterion 中注册
+# losses.py 中扩展
 self.losses.append("custom")
+def loss_custom(self, outputs, targets, indices, num_boxes):
+    return {"loss_custom": self.custom_loss(outputs, targets)}
 ```
 
 ## 预留改进空间
 
-当前实现预留了以下扩展点：
-
-1. **骨干网络预训练权重加载** (ResNetBackbone)
-2. **数据加载器实现** (data/)
-3. **ReID特征学习** (TrackingLoss)
-4. **Deformable Attention** (性能优化)
-5. **更精细的时序对齐** (TemporalFeatureFusion)
-6. **评估指标计算** (MOTA, IDF1等)
+1. **骨干网络预训练权重加载**
+2. **数据加载器实现**
+3. **ReID特征学习**
+4. **Deformable Attention**（性能优化）
+5. **更精细的时序对齐**
+6. **评估指标计算**（MOTA, IDF1等）
 7. **TensorBoard/Wandb集成**
-8. **分布式训练支持**
 
 ## 文件清单
 
@@ -178,38 +162,35 @@ mg_motrv2/
 ├── __init__.py              # 包初始化
 ├── models/
 │   ├── __init__.py          # 模型导出
-│   ├── mg_attention.py      # 多粒度注意力（9080字节）
-│   ├── mg_motr.py          # MG-DETR头（15479字节）
-│   ├── backbone.py         # 骨干网络（11770字节）
-│   └── mg_motrv2.py        # 完整模型（9372字节）
+│   ├── mg_attention.py      # 多粒度注意力 (~7KB)
+│   ├── backbone.py          # 骨干网络 (~7KB)
+│   ├── mg_motr.py          # MG-DETR头 (~13KB)
+│   └── mg_motrv2.py        # 完整模型 (~5KB)
 ├── configs/
-│   └── default_config.py   # 默认配置（6075字节）
+│   └── default_config.py   # 默认配置 (~3KB)
 ├── utils/
 │   ├── __init__.py          # 工具导出
-│   ├── matcher.py          # 匈牙利匹配器（5253字节）
-│   └── losses.py           # 损失函数（8573字节）
-├── train.py                # 训练脚本（8642字节）
-└── demo.py                 # 演示脚本（7921字节）
+│   ├── matcher.py          # 匈牙利匹配器 (~4KB)
+│   └── losses.py           # 损失函数 (~5KB)
+├── train.py                # 训练脚本 (~5KB)
+└── demo.py                 # 演示脚本 (~6KB)
 
 根目录：
-├── README.md               # 项目文档（5706字节）
+├── README.md               # 项目文档 (~2KB)
 ├── PROJECT_STRUCTURE.md    # 本文件
-├── requirements.txt        # 依赖项（379字节）
-├── setup.py               # 安装脚本（1299字节）
-├── test_basic.py          # 基础测试（5872字节）
-└── .gitignore             # Git忽略配置（474字节）
+├── requirements.txt        # 依赖项
+├── setup.py               # 安装脚本
+└── test_basic.py          # 基础测试 (~6KB)
 ```
 
 ## 代码统计
 
-- 总代码行数：~2500+ 行
-- Python文件数：13个
-- 核心模块数：4个
-- 配置选项数：50+
+- **总代码行数**：~1800行（精简后）
+- **Python文件数**：12个
+- **核心模块数**：4个
 
 ## 运行要求
 
 - Python >= 3.8
 - PyTorch >= 1.9.0
-- 显存：至少 8GB（训练模式）
-- 内存：至少 16GB
+- 显存：至少 8GB（训练）

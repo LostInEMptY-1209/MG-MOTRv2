@@ -1,51 +1,48 @@
 """
 MG-MOTRv2: Complete Model Integration
 完整的多粒度多目标跟踪模型
+
+数据流：
+    Input Image [B, 3, H, W]
+        ↓
+    Multi-Granularity Backbone (ResNet + FPN)
+        ↓
+    Multi-Granularity Features {fine, medium, coarse}
+        ↓
+    MG-DETR Head (Encoder-Decoder with MG-Attention)
+        ↓
+    Detection Outputs + Track Queries
+        ↓
+    MG-Tracker
+        ↓
+    Tracking Results
+
+扩展点：
+1. 可替换骨干网络（backbone.py）
+2. 可自定义多粒度注意力机制（mg_attention.py）
+3. 可扩展时序建模（TemporalGranularityAttention）
+4. 可集成ReID（TrackingLoss）
 """
 
 import torch
 import torch.nn as nn
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from .backbone import MultiGranularityBackbone
 from .mg_motr import MG_DETRHead, MGTracker
 
 
 class MGMOTRv2(nn.Module):
-    """
-    完整的多粒度多目标跟踪模型
-    
-    Architecture:
-        Input Image
-            ↓
-        Multi-Granularity Backbone (ResNet + FPN)
-            ↓
-        Multi-Granularity Features [fine, medium, coarse]
-            ↓
-        MG-DETR Head (Encoder-Decoder with MG-Attention)
-            ↓
-        Detection Outputs + Track Queries
-            ↓
-        MG-Tracker (Track Management)
-            ↓
-        Tracking Results
-    """
+    """完整的多粒度多目标跟踪模型"""
     
     def __init__(self, config: dict):
         super().__init__()
         self.config = config
         
-        # 模型配置
+        # 基础配置
         self.d_model = config.get("d_model", 256)
         self.num_queries = config.get("num_queries", 300)
         self.num_classes = config.get("num_classes", 1)
-        self.n_frames = config.get("n_frames", 1)
-        self.use_temporal = config.get("use_temporal", False)
-        
-        # 多粒度配置
-        self.granularity_levels = config.get(
-            "granularity_levels", ["fine", "medium", "coarse"]
-        )
-        self.n_granularity_levels = len(self.granularity_levels)
+        self.granularity_levels = config.get("granularity_levels", ["fine", "medium", "coarse"])
         
         # 1. 多粒度骨干网络
         backbone_config = config.get("backbone", {})
@@ -53,7 +50,7 @@ class MGMOTRv2(nn.Module):
         backbone_config["granularity_levels"] = self.granularity_levels
         self.backbone = MultiGranularityBackbone(**backbone_config)
         
-        # 2. 输入投影（将骨干特征投影到统一维度）
+        # 2. 输入投影
         self.input_proj = nn.ModuleDict({
             level: nn.Sequential(
                 nn.Conv2d(self.d_model, self.d_model, 1),
@@ -69,7 +66,7 @@ class MGMOTRv2(nn.Module):
             "num_classes": self.num_classes,
             "num_queries": self.num_queries,
             "use_mg_attn": True,
-            "n_granularity_levels": self.n_granularity_levels
+            "n_granularity_levels": len(self.granularity_levels)
         })
         self.detr_head = MG_DETRHead(**detr_config)
         
@@ -77,13 +74,6 @@ class MGMOTRv2(nn.Module):
         tracker_config = config.get("tracker", {})
         tracker_config["d_model"] = self.d_model
         self.tracker = MGTracker(**tracker_config)
-        
-        # 5. 时序处理（可选）
-        if self.use_temporal:
-            self.temporal_fusion = TemporalFeatureFusion(
-                d_model=self.d_model,
-                n_frames=self.n_frames
-            )
         
         # 初始化权重
         self._init_weights()
@@ -96,46 +86,36 @@ class MGMOTRv2(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
     
-    def extract_features(
-        self, 
-        images: torch.Tensor
-    ) -> Dict[str, torch.Tensor]:
-        """
-        提取多粒度特征
-        
-        Args:
-            images: 输入图像 [B, 3, H, W]
-        Returns:
-            features: 多粒度特征字典
-        """
-        # 主干网络提取
+    def extract_features(self, images: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """提取多粒度特征"""
         mg_features = self.backbone(images)
         
         # 投影到统一维度
-        projected_features = {}
-        for level, feat in mg_features.items():
-            projected_features[level] = self.input_proj[level](feat)
+        projected = {
+            level: self.input_proj[level](feat)
+            for level, feat in mg_features.items()
+        }
         
-        return projected_features
+        return projected
     
-    def forward_single_frame(
+    def forward(
         self,
         images: torch.Tensor,
         targets: Optional[List[Dict]] = None
     ) -> Dict[str, torch.Tensor]:
         """
-        单帧前向传播
+        模型前向传播
         
         Args:
             images: 输入图像 [B, 3, H, W]
-            targets: 训练时的目标标注（可选）
+            targets: 训练目标（可选）
         Returns:
-            outputs: 包含检测和跟踪结果的字典
+            outputs: 模型输出
         """
         # 1. 提取多粒度特征
         mg_features = self.extract_features(images)
         
-        # 准备DETR输入（使用中等粒度作为默认特征）
+        # 准备DETR输入（使用中等粒度作为默认）
         default_level = "medium" if "medium" in mg_features else list(mg_features.keys())[0]
         default_feat = mg_features[default_level]
         
@@ -146,113 +126,37 @@ class MGMOTRv2(nn.Module):
         ]
         
         # 2. DETR前向传播
-        detr_outputs = self.detr_head(
-            default_feat,
-            multi_granularity_features=mg_feat_list
-        )
+        detr_outputs = self.detr_head(default_feat, mg_feat_list)
         
-        # 3. 训练模式：直接返回损失
+        # 3. 训练模式：返回损失占位符
         if self.training and targets is not None:
-            losses = self.compute_losses(detr_outputs, targets)
-            return losses
+            return self._compute_losses(detr_outputs, targets)
         
-        # 4. 推理模式：后处理并更新跟踪
-        results = self.post_process(detr_outputs)
-        
-        return results
+        # 4. 推理模式：后处理
+        return self._post_process(detr_outputs)
     
-    def forward_sequence(
-        self,
-        images: torch.Tensor,
-        targets: Optional[List[List[Dict]]] = None
-    ) -> List[Dict[str, torch.Tensor]]:
-        """
-        序列前向传播（视频模式）
-        
-        Args:
-            images: 输入图像序列 [B, T, 3, H, W]
-            targets: 每帧的目标标注
-        Returns:
-            results: 每帧的跟踪结果列表
-        """
-        B, T, C, H, W = images.shape
-        
-        # 处理每帧
-        all_results = []
-        self.tracker.init_tracks()  # 重置跟踪器
-        
-        for t in range(T):
-            frame = images[:, t]  # [B, 3, H, W]
-            target = targets[t] if targets is not None else None
-            
-            result = self.forward_single_frame(frame, target)
-            all_results.append(result)
-        
-        return all_results
-    
-    def forward(
-        self,
-        images: torch.Tensor,
-        targets: Optional[List[Dict]] = None
-    ) -> Dict[str, torch.Tensor]:
-        """
-        模型前向传播入口
-        
-        Args:
-            images: 输入图像 [B, 3, H, W] 或 [B, T, 3, H, W]
-            targets: 目标标注
-        Returns:
-            outputs: 模型输出
-        """
-        if images.dim() == 5:
-            # 视频序列模式
-            return self.forward_sequence(images, targets)
-        else:
-            # 单帧模式
-            return self.forward_single_frame(images, targets)
-    
-    def compute_losses(
+    def _compute_losses(
         self,
         outputs: Dict[str, torch.Tensor],
         targets: List[Dict]
     ) -> Dict[str, torch.Tensor]:
-        """
-        计算训练损失
-        
-        Args:
-            outputs: DETR输出
-            targets: 目标标注
-        Returns:
-            losses: 损失字典
-        """
-        # 这里简化实现，实际应使用匈牙利匹配
-        losses = {}
-        
-        # 分类损失
+        """计算训练损失（占位符）"""
+        # TODO: 实现完整的损失计算（使用matcher和criterion）
         pred_logits = outputs["pred_logits"]
         pred_boxes = outputs["pred_boxes"]
         
-        # 占位符损失计算
-        losses["loss_ce"] = torch.tensor(0.0, device=pred_logits.device)
-        losses["loss_bbox"] = torch.tensor(0.0, device=pred_boxes.device)
-        losses["loss_giou"] = torch.tensor(0.0, device=pred_boxes.device)
-        
-        return losses
+        return {
+            "loss_ce": torch.tensor(0.0, device=pred_logits.device),
+            "loss_bbox": torch.tensor(0.0, device=pred_boxes.device),
+            "loss_giou": torch.tensor(0.0, device=pred_boxes.device),
+        }
     
-    def post_process(
+    def _post_process(
         self,
         outputs: Dict[str, torch.Tensor],
         threshold: float = 0.5
     ) -> List[Dict]:
-        """
-        后处理DETR输出
-        
-        Args:
-            outputs: DETR输出
-            threshold: 置信度阈值
-        Returns:
-            results: 处理后的检测结果列表
-        """
+        """后处理DETR输出"""
         pred_logits = outputs["pred_logits"]
         pred_boxes = outputs["pred_boxes"]
         
@@ -261,82 +165,17 @@ class MGMOTRv2(nn.Module):
         
         results = []
         for i in range(pred_logits.shape[0]):
-            # 筛选高置信度检测
             keep = scores[i] > threshold
             
-            result = {
+            results.append({
                 "scores": scores[i][keep],
                 "labels": labels[i][keep],
                 "boxes": pred_boxes[i][keep]
-            }
-            results.append(result)
+            })
         
         return results
 
 
-class TemporalFeatureFusion(nn.Module):
-    """
-    时序特征融合模块
-    用于处理视频序列
-    """
-    def __init__(self, d_model: int, n_frames: int):
-        super().__init__()
-        self.d_model = d_model
-        self.n_frames = n_frames
-        
-        # 时序注意力
-        self.temporal_attn = nn.MultiheadAttention(
-            d_model, 8, batch_first=True
-        )
-        
-        # 位置编码
-        self.temporal_pos = nn.Parameter(
-            torch.randn(n_frames, d_model)
-        )
-        
-        # 时序融合MLP
-        self.fusion_mlp = nn.Sequential(
-            nn.Linear(d_model * n_frames, d_model),
-            nn.LayerNorm(d_model),
-            nn.ReLU(inplace=True)
-        )
-    
-    def forward(self, frame_features: List[torch.Tensor]) -> torch.Tensor:
-        """
-        融合多帧特征
-        
-        Args:
-            frame_features: 多帧特征列表，每个元素为 [B, N, C]
-        Returns:
-            fused: 融合后的特征 [B, N, C]
-        """
-        B, N, C = frame_features[0].shape
-        
-        # 堆叠时序维度
-        feat_stack = torch.stack(frame_features, dim=1)  # [B, T, N, C]
-        feat_stack = feat_stack.permute(0, 2, 1, 3)  # [B, N, T, C]
-        feat_flat = feat_stack.reshape(B * N, self.n_frames, C)
-        
-        # 添加时序位置编码
-        feat_pos = feat_flat + self.temporal_pos.unsqueeze(0)
-        
-        # 时序自注意力
-        attn_out, _ = self.temporal_attn(feat_pos, feat_pos, feat_pos)
-        
-        # 融合
-        attn_flat = attn_out.reshape(B, N, self.n_frames * C)
-        fused = self.fusion_mlp(attn_flat)
-        
-        return fused
-
-
 def build_model(config: dict) -> MGMOTRv2:
-    """
-    构建MG-MOTRv2模型
-    
-    Args:
-        config: 模型配置字典
-    Returns:
-        model: 构建好的模型
-    """
+    """构建MG-MOTRv2模型"""
     return MGMOTRv2(config)

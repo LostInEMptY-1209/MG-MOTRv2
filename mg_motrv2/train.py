@@ -30,6 +30,7 @@ from .models.mg_motrv2 import build_model
 from .configs.default_config import Config, get_debug_config
 from .utils import build_matcher, build_criterion
 from .datasets import build_mot17_dataloader
+from torch.cuda.amp import autocast, GradScaler
 
 
 def get_args_parser():
@@ -108,6 +109,8 @@ def train_one_epoch(
     """训练一个epoch"""
     model.train()
     criterion.train()
+
+    scaler = GradScaler()
     
     total_loss = 0.0
     loss_ce_sum = 0.0
@@ -125,22 +128,29 @@ def train_one_epoch(
         outputs = model(images)
         
         # 计算损失
-        loss_dict = criterion(outputs, targets)
-        
-        # 加权损失
-        weight_dict = criterion.weight_dict
-        losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
-        
+        with autocast():
+            outputs = model(images)
+            loss_dict = criterion(outputs, targets)
+
+            weight_dict = criterion.weight_dict
+            losses = sum(
+                loss_dict[k] * weight_dict[k]
+                for k in loss_dict.keys() if k in weight_dict
+            )
+
         # 反向传播
         optimizer.zero_grad()
-        losses.backward()
-        
-        # 梯度裁剪
+
+        scaler.scale(losses).backward()
+
         if clip_max_norm > 0:
+            scaler.unscale_(optimizer)  # ⬅️ 必须在 clip 前
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
-        
-        optimizer.step()
-        
+
+        scaler.step(optimizer)
+        scaler.update()
+
+        torch.cuda.empty_cache()
         # 统计损失
         total_loss += losses.item()
         loss_ce_sum += loss_dict.get('loss_ce', 0).item() if isinstance(loss_dict.get('loss_ce'), torch.Tensor) else 0

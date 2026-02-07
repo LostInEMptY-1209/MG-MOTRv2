@@ -51,6 +51,7 @@ class MGTransformerEncoder(nn.Module):
         return self.norm(output)
 
 
+
 class MGTransformerEncoderLayer(nn.Module):
     """多粒度Transformer编码器层"""
     def __init__(
@@ -83,7 +84,20 @@ class MGTransformerEncoderLayer(nn.Module):
         
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
-    
+
+    def chunked_self_attention(self, src, pos_embed, chunk_size=512):
+        B, N, C = src.shape
+        out = torch.zeros_like(src)
+
+        for i in range(0, N, chunk_size):
+            q = src[:, i:i + chunk_size] + pos_embed[:, i:i + chunk_size]
+            k = src + pos_embed
+            v = src
+
+            attn_chunk, _ = self.self_attn(q, k, v)
+            out[:, i:i + chunk_size] = attn_chunk
+
+        return out
     def forward(
         self,
         src: torch.Tensor,
@@ -114,15 +128,17 @@ class MGTransformerEncoderLayer(nn.Module):
             attn_out = self.mg_attn(aligned_features)
             src = src + attn_out
         else:
-            # 标准自注意力
-            q = src + pos_embed
-            attn_out, _ = self.self_attn(q, q, src)
+            attn_out = self.chunked_self_attention(
+                src, pos_embed, chunk_size=512
+            )
             src = src + attn_out
-        
+
         src = self.norm1(src)
         src = src + self.ffn(self.norm2(src))
         
         return src
+
+
 
 
 class MGTransformerDecoder(nn.Module):

@@ -13,6 +13,7 @@ import torch.nn as nn
 from typing import Dict, List, Optional
 from .mg_attention import MultiGranularityAttention
 import torch.nn.functional as F
+from mg_motrv2.models.ops.ms_deform_attn import MSDeformAttn
 
 
 class MGTransformerEncoder(nn.Module):
@@ -138,40 +139,125 @@ class MGTransformerEncoderLayer(nn.Module):
         
         return src
 
+class DeformableDecoderLayer(nn.Module):
+    def __init__(self, d_model=256, n_heads=8, n_levels=3, n_points=4):
+        super().__init__()
+
+        self.self_attn = nn.MultiheadAttention(
+            d_model, n_heads, batch_first=True
+        )
+
+        self.cross_attn = MSDeformAttn(
+            d_model=d_model,
+            n_levels=n_levels,
+            n_heads=n_heads,
+            n_points=n_points
+        )
+
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_model * 4),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_model * 4, d_model),
+        )
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+
+        # reference point predictor
+        self.ref_point_head = nn.Linear(d_model, 2)
+
+    def forward(
+        self,
+        tgt,                   # [B, Q, C]
+        query_embed,           # [B, Q, C]
+        multi_scale_features,  # list of [B, C, H, W]
+        spatial_shapes,        # [n_levels, 2]
+        level_start_index      # [n_levels]
+    ):
+        B, Q, C = tgt.shape
+        n_levels = spatial_shapes.shape[0]
+
+        # 1️⃣ self-attention (Q × Q, very small)
+        q = tgt + query_embed
+        attn_out, _ = self.self_attn(q, q, tgt)
+        tgt = self.norm1(tgt + attn_out)
+
+        # 2️⃣ reference points: [B, Q, n_levels, 2]
+        reference_points = self.ref_point_head(tgt).sigmoid()
+        reference_points = reference_points[:, :, None, :].repeat(
+            1, 1, n_levels, 1
+        )
+
+        # 3️⃣ flatten multi-scale features
+        flattened = []
+        for feat in multi_scale_features:
+            B, C, H, W = feat.shape
+            flattened.append(feat.flatten(2).transpose(1, 2))
+
+        input_flatten = torch.cat(flattened, dim=1)
+
+        # 4️⃣ deformable cross-attention
+        tgt2 = self.cross_attn(
+            query=tgt,
+            reference_points=reference_points,
+            input_flatten=input_flatten,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index
+        )
+
+        tgt = self.norm2(tgt + tgt2)
+
+        # 5️⃣ FFN
+        tgt = self.norm3(tgt + self.ffn(tgt))
+
+        return tgt
 
 
 
 class MGTransformerDecoder(nn.Module):
-    """Transformer解码器"""
     def __init__(
         self,
-        d_model: int = 256,
-        n_heads: int = 8,
-        n_layers: int = 6,
-        dropout: float = 0.1
+        d_model=256,
+        n_heads=8,
+        n_layers=6,
+        dropout=0.1,
+        n_levels=3
     ):
         super().__init__()
-        
+
         self.layers = nn.ModuleList([
-            MGTransformerDecoderLayer(d_model, n_heads, dropout)
+            DeformableDecoderLayer(
+                d_model=d_model,
+                n_heads=n_heads,
+                n_levels=n_levels
+            )
             for _ in range(n_layers)
         ])
+
         self.norm = nn.LayerNorm(d_model)
-    
+
     def forward(
         self,
-        tgt: torch.Tensor,
-        memory: torch.Tensor,
-        query_embed: torch.Tensor,
-        pos_embed: torch.Tensor
-    ) -> torch.Tensor:
+        tgt,
+        query_embed,
+        multi_scale_features,
+        spatial_shapes,
+        level_start_index
+    ):
         output = tgt
         intermediate = []
-        
+
         for layer in self.layers:
-            output = layer(output, memory, query_embed, pos_embed)
+            output = layer(
+                output,
+                query_embed,
+                multi_scale_features,
+                spatial_shapes,
+                level_start_index
+            )
             intermediate.append(self.norm(output))
-        
+
         return torch.stack(intermediate)
 
 
@@ -356,22 +442,33 @@ class MG_DETRHead(nn.Module):
         pos_embed = self.pos_encoding(features).to(src.device)
         
         # 编码器
-        if self.use_mg_attn and multi_granularity_features is not None:
-            mg_features = [
-                feat.flatten(2).permute(0, 2, 1) 
-                for feat in multi_granularity_features
-            ]
-            memory = self.encoder(src, mg_features, pos_embed)
-        else:
-            memory = self.encoder(src + pos_embed)
-        
+        multi_scale_features = multi_granularity_features
+
+        spatial_shapes = torch.as_tensor(
+            [(feat.shape[2], feat.shape[3]) for feat in multi_scale_features],
+            dtype=torch.long,
+            device=features.device
+        )
+
+        level_start_index = torch.cat(
+            (
+                spatial_shapes.new_zeros((1,)),
+                spatial_shapes.prod(1).cumsum(0)[:-1]
+            )
+        )
+
         # 查询嵌入
         query_embed = self.query_embed.weight.unsqueeze(0).repeat(B, 1, 1)
         tgt = torch.zeros_like(query_embed)
-        
-        # 解码器
-        hs = self.decoder(tgt, memory, query_embed, pos_embed)
-        
+
+        hs = self.decoder(
+            tgt,
+            query_embed,
+            multi_scale_features,
+            spatial_shapes,
+            level_start_index
+        )
+
         # 输出
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()

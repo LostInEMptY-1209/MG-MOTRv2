@@ -149,7 +149,6 @@ def train_one_epoch(
 
         scaler.step(optimizer)
         scaler.update()
-
         torch.cuda.empty_cache()
         # 统计损失
         total_loss += losses.item()

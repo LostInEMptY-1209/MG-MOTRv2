@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, List, Optional
 from .mg_attention import MultiGranularityAttention
+import torch.nn.functional as F
 
 
 class MGTransformerEncoder(nn.Module):
@@ -91,8 +92,26 @@ class MGTransformerEncoderLayer(nn.Module):
     ) -> torch.Tensor:
         if self.use_mg_attn:
             # 使用多粒度注意力
+            # src: [B, N, C]
             all_features = [src] + mg_features[:2]
-            attn_out = self.mg_attn(all_features[:3])
+
+            target_len = src.shape[1]  # 以 src 的 token 数作为基准
+            aligned_features = []
+
+            for feat in all_features:
+                # feat: [B, N_i, C]
+                if feat.shape[1] != target_len:
+                    # 在 token 维度上做插值对齐
+                    feat = F.interpolate(
+                        feat.permute(0, 2, 1),  # [B, C, N_i]
+                        size=target_len,
+                        mode="linear",
+                        align_corners=False
+                    ).permute(0, 2, 1)  # [B, N, C]
+
+                aligned_features.append(feat)
+
+            attn_out = self.mg_attn(aligned_features)
             src = src + attn_out
         else:
             # 标准自注意力

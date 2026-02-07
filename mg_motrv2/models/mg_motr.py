@@ -209,22 +209,49 @@ class MGTransformerDecoderLayer(nn.Module):
         return tgt
 
 
-class PositionalEncoding(nn.Module):
-    """位置编码"""
-    def __init__(self, d_model: int, max_len: int = 5000):
+class PositionEmbeddingSine(nn.Module):
+    """
+    2D sine-cosine positional encoding (DETR style)
+    """
+    def __init__(self, num_pos_feats=128, temperature=10000):
         super().__init__()
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * 
-            (-torch.log(torch.tensor(10000.0)) / d_model)
-        )
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-    
-    def forward(self, length: int, batch_size: int) -> torch.Tensor:
-        return self.pe[:length].unsqueeze(0).repeat(batch_size, 1, 1)
+        self.num_pos_feats = num_pos_feats
+        self.temperature = temperature
+
+    def forward(self, feat: torch.Tensor):
+        # feat: [B, C, H, W]
+        B, _, H, W = feat.shape
+        device = feat.device
+
+        y_embed = torch.arange(H, device=device).unsqueeze(1).repeat(1, W)
+        x_embed = torch.arange(W, device=device).unsqueeze(0).repeat(H, 1)
+
+        dim_t = torch.arange(self.num_pos_feats, device=device)
+        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
+
+        pos_x = x_embed[..., None] / dim_t
+        pos_y = y_embed[..., None] / dim_t
+
+        # ⬇⬇⬇ 这里是关键修正点 ⬇⬇⬇
+        pos_x = torch.stack(
+            (pos_x[..., 0::2].sin(), pos_x[..., 1::2].cos()),
+            dim=-1
+        ).flatten(2)
+
+        pos_y = torch.stack(
+            (pos_y[..., 0::2].sin(), pos_y[..., 1::2].cos()),
+            dim=-1
+        ).flatten(2)
+
+        # [H, W, C]
+        pos = torch.cat((pos_y, pos_x), dim=2)
+
+        # [B, C, H, W]
+        pos = pos.permute(2, 0, 1).unsqueeze(0).repeat(B, 1, 1, 1)
+
+        # [B, HW, C]
+        return pos.flatten(2).permute(0, 2, 1)
+
 
 
 class MLP(nn.Module):
@@ -270,7 +297,7 @@ class MG_DETRHead(nn.Module):
         self.query_embed = nn.Embedding(num_queries, d_model)
         
         # 位置编码
-        self.pos_encoding = PositionalEncoding(d_model)
+        self.pos_encoding = PositionEmbeddingSine(d_model // 2)
         
         # 编码器
         if use_mg_attn:
@@ -310,7 +337,7 @@ class MG_DETRHead(nn.Module):
         src = features.flatten(2).permute(0, 2, 1)
         
         # 生成位置编码
-        pos_embed = self.pos_encoding(H * W, B).to(src.device)
+        pos_embed = self.pos_encoding(features).to(src.device)
         
         # 编码器
         if self.use_mg_attn and multi_granularity_features is not None:

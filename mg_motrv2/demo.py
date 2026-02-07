@@ -10,14 +10,14 @@ Demo script for MG-MOTRv2
 import torch
 import argparse
 
-from models import (
+from mg_motrv2.models import (
     MultiGranularityAttention,
     TemporalGranularityAttention,
     GranularityLevel,
     MultiGranularityBackbone,
 )
-from models.mg_motrv2 import MGMOTRv2
-from configs.default_config import Config
+from mg_motrv2.models.mg_motrv2 import MGMOTRv2
+from mg_motrv2.configs.default_config import Config
 
 
 def demo_granularity_level():

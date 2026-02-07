@@ -173,9 +173,9 @@ class MultiGranularityBackbone(nn.Module):
         # 基础骨干
         self.backbone = ResNetBackbone(layers=layers)
         
-        # FPN
+        # FPN - 输入通道对应 stride_8/16/32 的特征 (256, 512, 1024)
         self.fpn = FeaturePyramidNetwork(
-            in_channels_list=[512, 1024, 2048],
+            in_channels_list=[256, 512, 1024],
             out_channels=fpn_channels
         )
         

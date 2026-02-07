@@ -48,6 +48,9 @@ class MGMOTRv2(nn.Module):
         backbone_config = config.get("backbone", {})
         backbone_config["fpn_channels"] = self.d_model
         backbone_config["granularity_levels"] = self.granularity_levels
+        # 映射 'type' 到 'backbone_type'
+        if "type" in backbone_config:
+            backbone_config["backbone_type"] = backbone_config.pop("type")
         self.backbone = MultiGranularityBackbone(**backbone_config)
         
         # 2. 输入投影
